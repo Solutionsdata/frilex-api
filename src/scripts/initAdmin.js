@@ -6,32 +6,37 @@ const ADMIN_NAME = 'Super Admin';
 
 async function initAdmin(db, auth) {
   try {
+    const hashedPassword = await bcrypt.hash(ADMIN_PASSWORD, 12);
     const snap = await db.collection('users').where('email', '==', ADMIN_EMAIL).limit(1).get();
 
     if (!snap.empty) {
+      // User exists — always force correct role + password (handles null password case)
       const uid = snap.docs[0].id;
-      const data = snap.docs[0].data();
-      if (data.role !== 'admin') {
-        await db.collection('users').doc(uid).update({ role: 'admin', updatedAt: new Date().toISOString() });
-        console.log('[Admin] Existing user promoted to admin:', uid);
-      } else {
-        console.log('[Admin] Super admin already exists:', uid);
-      }
+      await db.collection('users').doc(uid).update({
+        role: 'admin',
+        password: hashedPassword,
+        emailVerified: true,
+        disabled: false,
+        updatedAt: new Date().toISOString(),
+      });
+      try { await auth.updateUser(uid, { password: ADMIN_PASSWORD, emailVerified: true }); } catch (_) {}
+      console.log('[Admin] Admin account synced — uid:', uid);
       return;
     }
 
+    // New user — create in Firebase Auth + Firestore
     let firebaseUser;
     try {
       firebaseUser = await auth.createUser({ email: ADMIN_EMAIL, password: ADMIN_PASSWORD, displayName: ADMIN_NAME, emailVerified: true });
     } catch (e) {
       if (e.code === 'auth/email-already-exists') {
         firebaseUser = await auth.getUserByEmail(ADMIN_EMAIL);
+        // If found in Firebase Auth but not in Firestore, create the Firestore record
       } else {
         throw e;
       }
     }
 
-    const hashedPassword = await bcrypt.hash(ADMIN_PASSWORD, 12);
     await db.collection('users').doc(firebaseUser.uid).set({
       uid: firebaseUser.uid,
       name: ADMIN_NAME,
@@ -50,9 +55,9 @@ async function initAdmin(db, auth) {
       updatedAt: new Date().toISOString(),
     });
 
-    console.log('[Admin] Super admin created:', firebaseUser.uid);
+    console.log('[Admin] Super admin created — uid:', firebaseUser.uid);
   } catch (err) {
-    console.error('[Admin] Failed to init admin:', err.message);
+    console.error('[Admin] initAdmin failed:', err.message);
   }
 }
 
