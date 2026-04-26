@@ -2,6 +2,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { getAuth } = require('../config/firebase');
 const UserModel = require('../models/userModel');
+const WhatsApp = require('./whatsappService');
 
 const SALT_ROUNDS = 12;
 
@@ -39,6 +40,12 @@ const AuthService = {
 
     const tokens = this.generateTokens(firebaseUser.uid);
     const { password, ...safeUser } = user;
+
+    // WhatsApp welcome (fire-and-forget)
+    if (data.phone) {
+      WhatsApp.welcome(data.phone, { name: data.name, role: data.role });
+    }
+
     return { user: safeUser, ...tokens };
   },
 

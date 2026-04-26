@@ -1,6 +1,7 @@
 const JobModel = require('../models/jobModel');
 const ChatModel = require('../models/chatModel');
 const UserModel = require('../models/userModel');
+const WhatsApp = require('../services/whatsappService');
 
 const JobController = {
   async list(req, res) {
@@ -13,7 +14,6 @@ const JobController = {
         JobModel.listOpen(),
         JobModel.listByProfessional(uid),
       ]);
-      // Merge: open jobs + jobs this professional is working on, deduplicated
       const seen = new Set();
       jobs = [...openJobs, ...myJobs].filter((j) => {
         if (seen.has(j.id)) return false;
@@ -59,10 +59,11 @@ const JobController = {
   // Professional directly accepts the job at the original price
   async accept(req, res) {
     const professionalId = req.user.uid;
+    const { name: professionalName } = req.user;
     const job = await JobModel.getById(req.params.id);
     if (!job) return res.status(404).json({ error: 'Vaga não encontrada.' });
-    if (job.status !== 'open') return res.status(400).json({ error: 'Esta vaga não está mais disponível.' });
-    if (job.clientId === professionalId) return res.status(400).json({ error: 'Você não pode aceitar sua própria vaga.' });
+    if (job.status !== 'open') return res.status(400).json({ error: 'Esta oportunidade não está mais disponível.' });
+    if (job.clientId === professionalId) return res.status(400).json({ error: 'Você não pode aceitar sua própria oportunidade.' });
 
     await JobModel.accept(job.id, professionalId);
 
@@ -73,7 +74,17 @@ const JobController = {
     const text = `✅ Oportunidade aceita!\n\n📋 *${job.title}*\n${job.description}\n\n💰 Valor: ${priceText}\n📍 ${locationText}${job.notes ? `\n\n📝 Observações: ${job.notes}` : ''}`;
     await ChatModel.sendMessage(chat.id, { senderId: professionalId, receiverId: job.clientId, text, type: 'text' });
 
-    res.json({ success: true, otherUserId: job.clientId, message: 'Vaga aceita com sucesso!' });
+    // WhatsApp: notify client that professional accepted
+    const client = await UserModel.findById(job.clientId);
+    WhatsApp.proposalAccepted(client?.phone, {
+      professionalName,
+      jobTitle: job.title,
+      clientName: job.clientName,
+      price: job.price,
+      priceType: job.priceType,
+    });
+
+    res.json({ success: true, otherUserId: job.clientId, message: 'Oportunidade aceita com sucesso!' });
   },
 
   // Professional sends a counter-proposal
@@ -81,8 +92,8 @@ const JobController = {
     const { uid, name, avatar } = req.user;
     const job = await JobModel.getById(req.params.id);
     if (!job) return res.status(404).json({ error: 'Vaga não encontrada.' });
-    if (job.status !== 'open') return res.status(400).json({ error: 'Esta vaga não está mais disponível.' });
-    if (job.clientId === uid) return res.status(400).json({ error: 'Você não pode fazer proposta na sua própria vaga.' });
+    if (job.status !== 'open') return res.status(400).json({ error: 'Esta oportunidade não está mais disponível.' });
+    if (job.clientId === uid) return res.status(400).json({ error: 'Você não pode fazer proposta na sua própria oportunidade.' });
 
     const { proposedPrice, observation } = req.body;
     if (!observation || observation.trim().length < 5)
@@ -92,8 +103,18 @@ const JobController = {
       professionalId: uid,
       professionalName: name,
       professionalAvatar: avatar || null,
-      proposedPrice: proposedPrice || job.budget,
+      proposedPrice: proposedPrice || job.price,
       observation: observation.trim(),
+    });
+
+    // WhatsApp: notify client about new proposal
+    const client = await UserModel.findById(job.clientId);
+    WhatsApp.newProposal(client?.phone, {
+      clientName: job.clientName,
+      jobTitle: job.title,
+      professionalName: name,
+      proposedPrice: proposal.proposedPrice,
+      priceType: job.priceType,
     });
 
     res.status(201).json({ proposal });
@@ -106,7 +127,7 @@ const JobController = {
     const job = await JobModel.getById(jobId);
     if (!job) return res.status(404).json({ error: 'Vaga não encontrada.' });
     if (job.clientId !== uid) return res.status(403).json({ error: 'Sem permissão.' });
-    if (job.status !== 'open') return res.status(400).json({ error: 'Esta vaga não está mais aberta.' });
+    if (job.status !== 'open') return res.status(400).json({ error: 'Esta oportunidade não está mais aberta.' });
 
     const proposal = await JobModel.acceptProposal(jobId, proposalId);
 
@@ -116,6 +137,16 @@ const JobController = {
     const locationText = [job.neighborhood, job.city, job.state].filter(Boolean).join(', ');
     const text = `🤝 Proposta aceita!\n\n📋 *${job.title}*\n${job.description}\n\n💰 Valor acordado: ${priceText}\n📍 ${locationText}${proposal.observation ? `\n\n📝 Observação técnica: ${proposal.observation}` : ''}`;
     await ChatModel.sendMessage(chat.id, { senderId: uid, receiverId: proposal.professionalId, text, type: 'text' });
+
+    // WhatsApp: notify professional that their proposal was accepted
+    const professional = await UserModel.findById(proposal.professionalId);
+    WhatsApp.proposalAccepted(professional?.phone, {
+      professionalName: proposal.professionalName,
+      jobTitle: job.title,
+      clientName: job.clientName,
+      price: proposal.proposedPrice,
+      priceType: job.priceType,
+    });
 
     res.json({ success: true, otherUserId: proposal.professionalId, job: await JobModel.getById(jobId) });
   },
@@ -133,7 +164,7 @@ const JobController = {
 
   // Professional marks job as complete with evidence
   async completeByProfessional(req, res) {
-    const { uid } = req.user;
+    const { uid, name: professionalName } = req.user;
     const { completionNote } = req.body;
     const job = await JobModel.getById(req.params.id);
     if (!job) return res.status(404).json({ error: 'Vaga não encontrada.' });
@@ -141,10 +172,19 @@ const JobController = {
     if (!['confirmed', 'in_progress'].includes(job.status)) return res.status(400).json({ error: 'Status inválido.' });
     await JobModel.completeByProfessional(job.id, completionNote);
 
-    // Notify client via chat
+    // In-app chat notification
     const chat = await ChatModel.createOrGetChat(job.clientId, uid);
     const text = `✅ Serviço concluído!\n\n${completionNote ? `📝 ${completionNote}\n\n` : ''}Por favor, confirme a conclusão na plataforma para liberar o pagamento.`;
     await ChatModel.sendMessage(chat.id, { senderId: uid, receiverId: job.clientId, text, type: 'text' });
+
+    // WhatsApp: notify client to confirm completion
+    const client = await UserModel.findById(job.clientId);
+    WhatsApp.jobCompletedByProfessional(client?.phone, {
+      clientName: job.clientName,
+      jobTitle: job.title,
+      professionalName,
+      completionNote: completionNote || '',
+    });
 
     res.json({ success: true });
   },
@@ -157,6 +197,16 @@ const JobController = {
     if (job.clientId !== uid) return res.status(403).json({ error: 'Sem permissão.' });
     if (job.status !== 'awaiting_confirmation') return res.status(400).json({ error: 'Aguardando o profissional marcar como concluído.' });
     await JobModel.confirmCompletion(job.id);
+
+    // WhatsApp: notify professional that payment was released
+    const professional = await UserModel.findById(job.acceptedBy);
+    WhatsApp.paymentReleased(professional?.phone, {
+      professionalName: professional?.name || '',
+      jobTitle: job.title,
+      price: job.confirmedPrice || job.price,
+      priceType: job.priceType,
+    });
+
     res.json({ success: true, message: 'Serviço confirmado. Pagamento liberado!' });
   },
 
@@ -165,7 +215,7 @@ const JobController = {
     const job = await JobModel.getById(req.params.id);
     if (!job) return res.status(404).json({ error: 'Vaga não encontrada.' });
     if (job.clientId !== uid) return res.status(403).json({ error: 'Sem permissão.' });
-    if (!['open', 'confirmed'].includes(job.status)) return res.status(400).json({ error: 'Esta vaga não pode ser cancelada.' });
+    if (!['open', 'confirmed'].includes(job.status)) return res.status(400).json({ error: 'Esta oportunidade não pode ser cancelada.' });
     await JobModel.cancel(job.id);
     res.json({ success: true });
   },

@@ -2,6 +2,7 @@ const bcrypt = require('bcryptjs');
 const ServiceModel = require('../models/serviceModel');
 const UserModel = require('../models/userModel');
 const NotificationService = require('../services/notificationService');
+const WhatsApp = require('../services/whatsappService');
 const { getFirestore, getAuth } = require('../config/firebase');
 
 const AdminController = {
@@ -230,6 +231,11 @@ const AdminController = {
     const hashed = await bcrypt.hash(password, 12);
     await UserModel.update(uid, { password: hashed });
     try { await getAuth().updateUser(uid, { password }); } catch (_) {}
+
+    // WhatsApp: notify user of their new password
+    if (target.phone) {
+      WhatsApp.passwordReset(target.phone, { name: target.name, newPassword: password });
+    }
 
     res.json({ message: 'Senha atualizada com sucesso.' });
   },
