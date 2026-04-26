@@ -5,6 +5,8 @@ const { authenticate, requireAdmin } = require('../middleware/auth');
 router.use(authenticate, requireAdmin);
 
 router.get('/stats', AdminController.getDashboardStats);
+router.get('/users', AdminController.listUsers);
+router.get('/jobs', AdminController.listAllJobs);
 router.get('/services/pending', AdminController.getPendingServices);
 router.patch('/services/:id/review', AdminController.reviewService);
 router.get('/documents/pending', AdminController.getPendingDocuments);
