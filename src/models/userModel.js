@@ -16,6 +16,7 @@ const UserModel = {
       location: data.address ? { city: data.address.cidade, state: data.address.estado, country: 'BR' } : null,
       address: data.address || null,
       profession: data.profession || null,
+      password: data.password || null,
       disabled: false,
       emailVerified: false,
       createdAt: new Date().toISOString(),
