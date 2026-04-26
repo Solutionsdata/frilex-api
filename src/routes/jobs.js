@@ -3,6 +3,7 @@ const { authenticate } = require('../middleware/auth');
 const JobController = require('../controllers/jobController');
 
 router.get('/', authenticate, JobController.list);
+router.get('/open', authenticate, JobController.listOpen);
 router.post('/', authenticate, JobController.create);
 router.get('/:id', authenticate, JobController.getById);
 

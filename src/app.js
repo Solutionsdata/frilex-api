@@ -23,6 +23,8 @@ const reviewRoutes = require('./routes/reviews');
 const adminRoutes = require('./routes/admin');
 const paymentRoutes = require('./routes/payment');
 const jobRoutes = require('./routes/jobs');
+const walletRoutes = require('./routes/wallet');
+const notificationRoutes = require('./routes/notifications');
 
 const firebaseApp = initFirebase();
 if (firebaseApp) {
@@ -72,6 +74,8 @@ app.use('/api/reviews', reviewRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/payment', paymentRoutes);
 app.use('/api/jobs', jobRoutes);
+app.use('/api/wallet', walletRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
 
