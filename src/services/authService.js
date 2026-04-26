@@ -50,16 +50,22 @@ const AuthService = {
       throw err;
     }
 
-    const isValid = await bcrypt.compare(password, user.password);
-    if (!isValid) {
-      const err = new Error('Credenciais inválidas.');
+    if (user.disabled) {
+      const err = new Error('Conta desativada. Entre em contato com o suporte.');
+      err.status = 403;
+      throw err;
+    }
+
+    if (!user.password) {
+      const err = new Error('Senha não configurada. Solicite ao administrador o acesso à sua conta.');
       err.status = 401;
       throw err;
     }
 
-    if (user.disabled) {
-      const err = new Error('Conta desativada.');
-      err.status = 403;
+    const isValid = await bcrypt.compare(password, user.password);
+    if (!isValid) {
+      const err = new Error('Credenciais inválidas.');
+      err.status = 401;
       throw err;
     }
 

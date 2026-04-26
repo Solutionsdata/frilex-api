@@ -1,7 +1,8 @@
+const bcrypt = require('bcryptjs');
 const ServiceModel = require('../models/serviceModel');
 const UserModel = require('../models/userModel');
 const NotificationService = require('../services/notificationService');
-const { getFirestore } = require('../config/firebase');
+const { getFirestore, getAuth } = require('../config/firebase');
 
 const AdminController = {
   async getDashboardStats(req, res) {
@@ -182,6 +183,71 @@ const AdminController = {
     const jobs = snap.docs.map((d) => d.data());
     jobs.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     res.json({ jobs, total: jobs.length });
+  },
+
+  // Delete user from Firestore + Firebase Auth
+  async deleteUser(req, res) {
+    const { uid } = req.params;
+    if (uid === req.user.uid) return res.status(400).json({ error: 'Você não pode excluir sua própria conta.' });
+
+    const target = await UserModel.findById(uid);
+    if (!target) return res.status(404).json({ error: 'Usuário não encontrado.' });
+    if (target.role === 'admin') return res.status(403).json({ error: 'Não é possível excluir um administrador.' });
+
+    const db = getFirestore();
+    await db.collection('users').doc(uid).delete();
+    try { await getAuth().deleteUser(uid); } catch (_) {}
+
+    res.json({ message: 'Conta excluída com sucesso.' });
+  },
+
+  // Set user role (admin can grant/revoke admin, but cannot set 'super')
+  async setRole(req, res) {
+    const { uid } = req.params;
+    const { role } = req.body;
+    if (!['client', 'professional', 'admin'].includes(role))
+      return res.status(400).json({ error: 'Papel inválido. Use: client, professional ou admin.' });
+    if (uid === req.user.uid)
+      return res.status(400).json({ error: 'Você não pode alterar seu próprio papel.' });
+
+    const target = await UserModel.findById(uid);
+    if (!target) return res.status(404).json({ error: 'Usuário não encontrado.' });
+
+    await UserModel.update(uid, { role });
+    res.json({ message: `Papel atualizado para ${role}.` });
+  },
+
+  // Admin sets a new password for a specific user
+  async setUserPassword(req, res) {
+    const { uid } = req.params;
+    const { password } = req.body;
+    if (!password || password.length < 6)
+      return res.status(400).json({ error: 'Senha deve ter pelo menos 6 caracteres.' });
+
+    const target = await UserModel.findById(uid);
+    if (!target) return res.status(404).json({ error: 'Usuário não encontrado.' });
+
+    const hashed = await bcrypt.hash(password, 12);
+    await UserModel.update(uid, { password: hashed });
+    try { await getAuth().updateUser(uid, { password }); } catch (_) {}
+
+    res.json({ message: 'Senha atualizada com sucesso.' });
+  },
+
+  // Nullify passwords for ALL non-admin users (forces re-authentication via admin reset)
+  async resetAllPasswords(req, res) {
+    const db = getFirestore();
+    const snap = await db.collection('users')
+      .where('role', '!=', 'admin')
+      .get();
+
+    const batch = db.batch();
+    snap.docs.forEach((doc) => {
+      batch.update(doc.ref, { password: null, updatedAt: new Date().toISOString() });
+    });
+    await batch.commit();
+
+    res.json({ message: `Senhas de ${snap.size} usuário(s) resetadas. Eles precisarão de nova senha pelo admin.`, count: snap.size });
   },
 };
 
