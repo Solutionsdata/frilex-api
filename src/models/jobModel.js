@@ -4,7 +4,7 @@ const { v4: uuidv4 } = require('uuid');
 const COLLECTION = 'jobPosts';
 
 const JobModel = {
-  async create({ clientId, clientName, clientAvatar, title, description, category, budget, city, state, notes }) {
+  async create({ clientId, clientName, clientAvatar, title, description, category, price, priceType, city, state, neighborhood, notes }) {
     const db = getFirestore();
     const id = uuidv4();
     const job = {
@@ -15,9 +15,11 @@ const JobModel = {
       title,
       description,
       category,
-      budget: budget || null,
+      price: price || null,
+      priceType: priceType || 'fixed',
       city: city || '',
       state: state || '',
+      neighborhood: neighborhood || '',
       notes: notes || null,
       status: 'open',
       acceptedBy: null,

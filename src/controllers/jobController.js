@@ -28,7 +28,7 @@ const JobController = {
 
   async create(req, res) {
     const { uid, name, avatar } = req.user;
-    const { title, description, category, budget, city, state, notes } = req.body;
+    const { title, description, category, price, priceType, city, state, neighborhood, notes } = req.body;
     if (!title || !description || !category || !city)
       return res.status(400).json({ error: 'Título, descrição, categoria e cidade são obrigatórios.' });
 
@@ -39,9 +39,11 @@ const JobController = {
       title: title.trim(),
       description: description.trim(),
       category,
-      budget: budget ? Number(budget) : null,
+      price: price ? Number(price) : null,
+      priceType: priceType || 'fixed',
       city: city.trim(),
       state: state ? state.trim() : '',
+      neighborhood: neighborhood ? neighborhood.trim() : '',
       notes: notes ? notes.trim() : null,
     });
     res.status(201).json({ job });
@@ -65,8 +67,10 @@ const JobController = {
     await JobModel.accept(job.id, professionalId);
 
     const chat = await ChatModel.createOrGetChat(job.clientId, professionalId);
-    const budgetText = job.budget ? `R$ ${Number(job.budget).toFixed(2)}` : 'A combinar';
-    const text = `✅ Vaga aceita!\n\n📋 *${job.title}*\n${job.description}\n\n💰 Valor: ${budgetText}\n📍 ${job.city}${job.state ? `, ${job.state}` : ''}${job.notes ? `\n\n📝 Observações: ${job.notes}` : ''}`;
+    const priceLabels = { fixed: 'por serviço', daily: 'por dia', weekly: 'por semana', monthly: 'por mês' };
+    const priceText = job.price ? `R$ ${Number(job.price).toFixed(2)} ${priceLabels[job.priceType] || ''}`.trim() : 'A combinar';
+    const locationText = [job.neighborhood, job.city, job.state].filter(Boolean).join(', ');
+    const text = `✅ Oportunidade aceita!\n\n📋 *${job.title}*\n${job.description}\n\n💰 Valor: ${priceText}\n📍 ${locationText}${job.notes ? `\n\n📝 Observações: ${job.notes}` : ''}`;
     await ChatModel.sendMessage(chat.id, { senderId: professionalId, receiverId: job.clientId, text, type: 'text' });
 
     res.json({ success: true, otherUserId: job.clientId, message: 'Vaga aceita com sucesso!' });
@@ -107,8 +111,10 @@ const JobController = {
     const proposal = await JobModel.acceptProposal(jobId, proposalId);
 
     const chat = await ChatModel.createOrGetChat(uid, proposal.professionalId);
-    const priceText = proposal.proposedPrice ? `R$ ${Number(proposal.proposedPrice).toFixed(2)}` : 'A combinar';
-    const text = `🤝 Proposta aceita!\n\n📋 *${job.title}*\n${job.description}\n\n💰 Valor acordado: ${priceText}\n📍 ${job.city}${job.state ? `, ${job.state}` : ''}${proposal.observation ? `\n\n📝 Observação técnica: ${proposal.observation}` : ''}`;
+    const priceLabels = { fixed: 'por serviço', daily: 'por dia', weekly: 'por semana', monthly: 'por mês' };
+    const priceText = proposal.proposedPrice ? `R$ ${Number(proposal.proposedPrice).toFixed(2)} ${priceLabels[job.priceType] || ''}`.trim() : 'A combinar';
+    const locationText = [job.neighborhood, job.city, job.state].filter(Boolean).join(', ');
+    const text = `🤝 Proposta aceita!\n\n📋 *${job.title}*\n${job.description}\n\n💰 Valor acordado: ${priceText}\n📍 ${locationText}${proposal.observation ? `\n\n📝 Observação técnica: ${proposal.observation}` : ''}`;
     await ChatModel.sendMessage(chat.id, { senderId: uid, receiverId: proposal.professionalId, text, type: 'text' });
 
     res.json({ success: true, otherUserId: proposal.professionalId, job: await JobModel.getById(jobId) });
