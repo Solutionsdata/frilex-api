@@ -28,7 +28,19 @@ const schemas = {
       'any.only': 'Perfil deve ser cliente ou profissional.',
       'any.required': 'Perfil é obrigatório.',
     }),
-    phone: Joi.string().pattern(/^\+?[1-9]\d{10,14}$/).optional(),
+    phone: Joi.string().min(8).max(20).optional().allow(''),
+    profession: Joi.string().max(120).optional(),
+    address: Joi.object({
+      cep: Joi.string().max(9).optional(),
+      rua: Joi.string().max(200).optional().allow(''),
+      numero: Joi.string().max(20).optional().allow(''),
+      complemento: Joi.string().max(100).optional().allow(''),
+      bloco: Joi.string().max(20).optional().allow(''),
+      apartamento: Joi.string().max(20).optional().allow(''),
+      bairro: Joi.string().max(100).optional().allow(''),
+      cidade: Joi.string().max(100).optional().allow(''),
+      estado: Joi.string().max(2).optional().allow(''),
+    }).optional(),
   }),
 
   login: Joi.object({
