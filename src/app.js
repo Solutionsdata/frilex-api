@@ -9,8 +9,9 @@ const morgan = require('morgan');
 const compression = require('compression');
 const rateLimit = require('express-rate-limit');
 
-const { initFirebase } = require('./config/firebase');
+const { initFirebase, getFirestore, getAuth } = require('./config/firebase');
 const { initSocketIO } = require('./services/chatService');
+const initAdmin = require('./scripts/initAdmin');
 const errorHandler = require('./middleware/errorHandler');
 
 const authRoutes = require('./routes/auth');
@@ -23,7 +24,10 @@ const adminRoutes = require('./routes/admin');
 const paymentRoutes = require('./routes/payment');
 const jobRoutes = require('./routes/jobs');
 
-initFirebase();
+const firebaseApp = initFirebase();
+if (firebaseApp) {
+  initAdmin(getFirestore(), getAuth()).catch(() => {});
+}
 
 const app = express();
 const server = http.createServer(app);
