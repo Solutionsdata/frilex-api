@@ -10,7 +10,7 @@ const UserModel = {
       name: data.name,
       email: data.email,
       phone: data.phone || null,
-      role: data.role,
+      role: data.role || 'user',
       avatar: data.avatar || null,
       bio: null,
       location: data.address ? { city: data.address.cidade, state: data.address.estado, country: 'BR' } : null,
@@ -21,16 +21,6 @@ const UserModel = {
       emailVerified: false,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      // Professional-specific
-      ...(data.role === 'professional' && {
-        services: [],
-        documents: { rg: null, cpf: null, proofOfAddress: null },
-        documentsStatus: 'pending', // 'pending' | 'approved' | 'rejected'
-        rating: 0,
-        totalReviews: 0,
-        availability: {},
-        portfolio: [],
-      }),
     };
     await db.collection(COLLECTION).doc(uid).set(user);
     return user;

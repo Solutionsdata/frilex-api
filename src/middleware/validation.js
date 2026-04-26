@@ -24,10 +24,7 @@ const schemas = {
       'string.pattern.base': 'Senha deve ter maiúscula, minúscula e número.',
       'any.required': 'Senha é obrigatória.',
     }),
-    role: Joi.string().valid('client', 'professional').required().messages({
-      'any.only': 'Perfil deve ser cliente ou profissional.',
-      'any.required': 'Perfil é obrigatório.',
-    }),
+    role: Joi.string().valid('user', 'admin').optional(),
     phone: Joi.string().min(8).max(20).optional().allow(''),
     profession: Joi.string().max(120).optional(),
     address: Joi.object({

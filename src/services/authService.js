@@ -90,7 +90,7 @@ const AuthService = {
         name: decoded.name || decoded.email.split('@')[0],
         email: decoded.email,
         avatar: decoded.picture || null,
-        role: 'client',
+        role: 'user',
         password: null,
       });
     }

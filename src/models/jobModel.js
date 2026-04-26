@@ -59,40 +59,54 @@ const JobModel = {
     return doc.exists ? doc.data() : null;
   },
 
-  // Professional directly accepts job at stated budget
+  // Applicant directly accepts job at stated price
   async accept(id, professionalId) {
     const db = getFirestore();
     const job = await this.getById(id);
     await db.collection(COLLECTION).doc(id).update({
-      status: 'confirmed',
+      status: 'awaiting_payment',
       acceptedBy: professionalId,
-      confirmedPrice: job?.budget || null,
+      confirmedPrice: job?.price || null,
+      pixKey: process.env.PLATFORM_PIX_KEY || null,
       acceptedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
   },
 
-  // Professional sends a counter-proposal
+  // Applicant sends a proposal with initial round
   async addProposal(jobId, { professionalId, professionalName, professionalAvatar, proposedPrice, observation }) {
     const db = getFirestore();
     const id = uuidv4();
+    const now = new Date().toISOString();
+    const firstRound = {
+      from: 'applicant',
+      price: proposedPrice ? Number(proposedPrice) : null,
+      message: observation || '',
+      createdAt: now,
+    };
     const proposal = {
       id,
       jobId,
       professionalId,
       professionalName,
       professionalAvatar: professionalAvatar || null,
-      proposedPrice: proposedPrice ? Number(proposedPrice) : null,
-      observation: observation || '',
+      rounds: [firstRound],
+      currentPrice: firstRound.price,
       status: 'pending',
-      createdAt: new Date().toISOString(),
+      createdAt: now,
     };
     await db.collection(COLLECTION).doc(jobId).collection('proposals').doc(id).set(proposal);
     await db.collection(COLLECTION).doc(jobId).update({
       hasProposals: true,
-      updatedAt: new Date().toISOString(),
+      updatedAt: now,
     });
     return proposal;
+  },
+
+  async getProposalById(jobId, proposalId) {
+    const db = getFirestore();
+    const doc = await db.collection(COLLECTION).doc(jobId).collection('proposals').doc(proposalId).get();
+    return doc.exists ? doc.data() : null;
   },
 
   async getProposals(jobId) {
@@ -101,7 +115,27 @@ const JobModel = {
     return snap.docs.map((d) => d.data()).sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
   },
 
-  // Client accepts a specific proposal
+  // Add a counter-proposal round (poster or applicant)
+  async counterProposal(jobId, proposalId, { from, price, message }) {
+    const db = getFirestore();
+    const propRef = db.collection(COLLECTION).doc(jobId).collection('proposals').doc(proposalId);
+    const propDoc = await propRef.get();
+    if (!propDoc.exists) throw Object.assign(new Error('Proposta não encontrada.'), { status: 404 });
+    const proposal = propDoc.data();
+    if (proposal.status !== 'pending') throw Object.assign(new Error('Proposta não está mais ativa.'), { status: 400 });
+
+    const round = {
+      from,
+      price: price ? Number(price) : proposal.currentPrice,
+      message: message || '',
+      createdAt: new Date().toISOString(),
+    };
+    const rounds = [...(proposal.rounds || []), round];
+    await propRef.update({ rounds, currentPrice: round.price, updatedAt: new Date().toISOString() });
+    return { ...proposal, rounds, currentPrice: round.price };
+  },
+
+  // Accept a proposal (poster or applicant can accept) — job goes to awaiting_payment
   async acceptProposal(jobId, proposalId) {
     const db = getFirestore();
     const propDoc = await db.collection(COLLECTION).doc(jobId).collection('proposals').doc(proposalId).get();
@@ -109,19 +143,17 @@ const JobModel = {
     const proposal = propDoc.data();
 
     const batch = db.batch();
-    // Mark the accepted proposal
     batch.update(db.collection(COLLECTION).doc(jobId).collection('proposals').doc(proposalId), { status: 'accepted' });
-    // Reject all other pending proposals for this job
     const othersSnap = await db.collection(COLLECTION).doc(jobId).collection('proposals')
       .where('status', '==', 'pending').get();
     othersSnap.docs.forEach((d) => {
       if (d.id !== proposalId) batch.update(d.ref, { status: 'rejected' });
     });
-    // Confirm the job
     batch.update(db.collection(COLLECTION).doc(jobId), {
-      status: 'confirmed',
+      status: 'awaiting_payment',
       acceptedBy: proposal.professionalId,
-      confirmedPrice: proposal.proposedPrice,
+      confirmedPrice: proposal.currentPrice ?? null,
+      pixKey: process.env.PLATFORM_PIX_KEY || null,
       confirmedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
@@ -129,7 +161,16 @@ const JobModel = {
     return proposal;
   },
 
-  // Professional marks job as in progress
+  // Poster confirms PIX payment — job moves to confirmed
+  async confirmPayment(id) {
+    const db = getFirestore();
+    await db.collection(COLLECTION).doc(id).update({
+      status: 'confirmed',
+      pixConfirmedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+  },
+
   async startJob(id) {
     const db = getFirestore();
     await db.collection(COLLECTION).doc(id).update({
@@ -139,7 +180,6 @@ const JobModel = {
     });
   },
 
-  // Professional marks job as completed (with optional evidence text)
   async completeByProfessional(id, completionNote) {
     const db = getFirestore();
     await db.collection(COLLECTION).doc(id).update({
@@ -150,7 +190,6 @@ const JobModel = {
     });
   },
 
-  // Client confirms job completion and releases payment
   async confirmCompletion(id) {
     const db = getFirestore();
     await db.collection(COLLECTION).doc(id).update({

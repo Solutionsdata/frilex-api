@@ -3,26 +3,28 @@ const ChatModel = require('../models/chatModel');
 const UserModel = require('../models/userModel');
 const WhatsApp = require('../services/whatsappService');
 
+const PRICE_LABELS = { fixed: 'por serviço', daily: 'por dia', weekly: 'por semana', monthly: 'por mês' };
+
+function fmtPrice(price, priceType) {
+  if (!price) return 'A combinar';
+  return `R$ ${Number(price).toFixed(2)} ${PRICE_LABELS[priceType] || ''}`.trim();
+}
+
 const JobController = {
   async list(req, res) {
-    const { uid, role } = req.user;
-    let jobs;
-    if (role === 'client') {
-      jobs = await JobModel.listByClient(uid);
-    } else if (role === 'professional') {
-      const [openJobs, myJobs] = await Promise.all([
-        JobModel.listOpen(),
-        JobModel.listByProfessional(uid),
-      ]);
-      const seen = new Set();
-      jobs = [...openJobs, ...myJobs].filter((j) => {
-        if (seen.has(j.id)) return false;
-        seen.add(j.id);
-        return true;
-      });
-    } else {
-      jobs = await JobModel.listOpen();
-    }
+    const { uid } = req.user;
+    const [openJobs, myPostedJobs, myAcceptedJobs] = await Promise.all([
+      JobModel.listOpen(),
+      JobModel.listByClient(uid),
+      JobModel.listByProfessional(uid),
+    ]);
+    const seen = new Set();
+    const jobs = [...openJobs, ...myPostedJobs, ...myAcceptedJobs].filter((j) => {
+      if (seen.has(j.id)) return false;
+      seen.add(j.id);
+      return true;
+    });
+    jobs.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     res.json({ jobs });
   },
 
@@ -56,48 +58,44 @@ const JobController = {
     res.json({ job, proposals });
   },
 
-  // Professional directly accepts the job at the original price
+  // Any user accepts a job at the stated price (not their own job)
   async accept(req, res) {
-    const professionalId = req.user.uid;
-    const { name: professionalName } = req.user;
+    const { uid, name: applicantName } = req.user;
     const job = await JobModel.getById(req.params.id);
     if (!job) return res.status(404).json({ error: 'Vaga não encontrada.' });
     if (job.status !== 'open') return res.status(400).json({ error: 'Esta oportunidade não está mais disponível.' });
-    if (job.clientId === professionalId) return res.status(400).json({ error: 'Você não pode aceitar sua própria oportunidade.' });
+    if (job.clientId === uid) return res.status(400).json({ error: 'Você não pode aceitar seu próprio trabalho.' });
 
-    await JobModel.accept(job.id, professionalId);
+    await JobModel.accept(job.id, uid);
 
-    const chat = await ChatModel.createOrGetChat(job.clientId, professionalId);
-    const priceLabels = { fixed: 'por serviço', daily: 'por dia', weekly: 'por semana', monthly: 'por mês' };
-    const priceText = job.price ? `R$ ${Number(job.price).toFixed(2)} ${priceLabels[job.priceType] || ''}`.trim() : 'A combinar';
+    const chat = await ChatModel.createOrGetChat(job.clientId, uid);
     const locationText = [job.neighborhood, job.city, job.state].filter(Boolean).join(', ');
-    const text = `✅ Oportunidade aceita!\n\n📋 *${job.title}*\n${job.description}\n\n💰 Valor: ${priceText}\n📍 ${locationText}${job.notes ? `\n\n📝 Observações: ${job.notes}` : ''}`;
-    await ChatModel.sendMessage(chat.id, { senderId: professionalId, receiverId: job.clientId, text, type: 'text' });
+    const text = `🤝 Aceitei seu trabalho!\n\n📋 *${job.title}*\n${job.description}\n\n💰 ${fmtPrice(job.price, job.priceType)}\n📍 ${locationText}${job.notes ? `\n\n📝 ${job.notes}` : ''}\n\nAguardando confirmação do pagamento via PIX. ✅`;
+    await ChatModel.sendMessage(chat.id, { senderId: uid, receiverId: job.clientId, text, type: 'text' });
 
-    // WhatsApp: notify client that professional accepted
     const client = await UserModel.findById(job.clientId);
     WhatsApp.proposalAccepted(client?.phone, {
-      professionalName,
+      professionalName: applicantName,
       jobTitle: job.title,
       clientName: job.clientName,
       price: job.price,
       priceType: job.priceType,
     });
 
-    res.json({ success: true, otherUserId: job.clientId, message: 'Oportunidade aceita com sucesso!' });
+    res.json({ success: true, otherUserId: job.clientId, message: 'Trabalho aceito! Aguardando pagamento PIX do contratante.' });
   },
 
-  // Professional sends a counter-proposal
+  // Any user sends a proposal on a job they didn't post
   async propose(req, res) {
     const { uid, name, avatar } = req.user;
     const job = await JobModel.getById(req.params.id);
     if (!job) return res.status(404).json({ error: 'Vaga não encontrada.' });
     if (job.status !== 'open') return res.status(400).json({ error: 'Esta oportunidade não está mais disponível.' });
-    if (job.clientId === uid) return res.status(400).json({ error: 'Você não pode fazer proposta na sua própria oportunidade.' });
+    if (job.clientId === uid) return res.status(400).json({ error: 'Você não pode fazer proposta no seu próprio trabalho.' });
 
     const { proposedPrice, observation } = req.body;
     if (!observation || observation.trim().length < 5)
-      return res.status(400).json({ error: 'Escreva uma observação técnica (mínimo 5 caracteres).' });
+      return res.status(400).json({ error: 'Escreva uma observação (mínimo 5 caracteres).' });
 
     const proposal = await JobModel.addProposal(job.id, {
       professionalId: uid,
@@ -107,64 +105,152 @@ const JobController = {
       observation: observation.trim(),
     });
 
-    // WhatsApp: notify client about new proposal
     const client = await UserModel.findById(job.clientId);
     WhatsApp.newProposal(client?.phone, {
       clientName: job.clientName,
       jobTitle: job.title,
       professionalName: name,
-      proposedPrice: proposal.proposedPrice,
+      proposedPrice: proposal.currentPrice,
       priceType: job.priceType,
     });
 
     res.status(201).json({ proposal });
   },
 
-  // Client accepts a specific proposal
+  // Add a counter-round to a proposal (poster or applicant)
+  async counterProposal(req, res) {
+    const { uid, name } = req.user;
+    const { jobId, proposalId } = req.params;
+    const { proposedPrice, observation } = req.body;
+
+    if (!observation || observation.trim().length < 5)
+      return res.status(400).json({ error: 'Escreva uma mensagem (mínimo 5 caracteres).' });
+
+    const job = await JobModel.getById(jobId);
+    if (!job) return res.status(404).json({ error: 'Vaga não encontrada.' });
+    if (job.status !== 'open') return res.status(400).json({ error: 'Esta oportunidade não está mais disponível.' });
+
+    const proposal = await JobModel.getProposalById(jobId, proposalId);
+    if (!proposal) return res.status(404).json({ error: 'Proposta não encontrada.' });
+    if (proposal.status !== 'pending') return res.status(400).json({ error: 'Esta proposta não está mais ativa.' });
+
+    const isPosted = job.clientId === uid;
+    const isApplicant = proposal.professionalId === uid;
+    if (!isPosted && !isApplicant)
+      return res.status(403).json({ error: 'Sem permissão.' });
+
+    const updated = await JobModel.counterProposal(jobId, proposalId, {
+      from: isPosted ? 'poster' : 'applicant',
+      price: proposedPrice ? Number(proposedPrice) : null,
+      message: observation.trim(),
+    });
+
+    // Notify the other party
+    const otherUserId = isPosted ? proposal.professionalId : job.clientId;
+    const otherUser = await UserModel.findById(otherUserId);
+    if (otherUser?.phone) {
+      WhatsApp.newProposal(otherUser.phone, {
+        clientName: otherUser.name,
+        jobTitle: job.title,
+        professionalName: name,
+        proposedPrice: updated.currentPrice,
+        priceType: job.priceType,
+      });
+    }
+
+    res.json({ proposal: updated });
+  },
+
+  // Poster or applicant accepts a proposal at current negotiated price
   async acceptProposal(req, res) {
     const { uid } = req.user;
     const { jobId, proposalId } = req.params;
     const job = await JobModel.getById(jobId);
     if (!job) return res.status(404).json({ error: 'Vaga não encontrada.' });
-    if (job.clientId !== uid) return res.status(403).json({ error: 'Sem permissão.' });
     if (job.status !== 'open') return res.status(400).json({ error: 'Esta oportunidade não está mais aberta.' });
 
-    const proposal = await JobModel.acceptProposal(jobId, proposalId);
+    const proposal = await JobModel.getProposalById(jobId, proposalId);
+    if (!proposal) return res.status(404).json({ error: 'Proposta não encontrada.' });
+    if (job.clientId !== uid && proposal.professionalId !== uid)
+      return res.status(403).json({ error: 'Sem permissão.' });
 
-    const chat = await ChatModel.createOrGetChat(uid, proposal.professionalId);
-    const priceLabels = { fixed: 'por serviço', daily: 'por dia', weekly: 'por semana', monthly: 'por mês' };
-    const priceText = proposal.proposedPrice ? `R$ ${Number(proposal.proposedPrice).toFixed(2)} ${priceLabels[job.priceType] || ''}`.trim() : 'A combinar';
+    const accepted = await JobModel.acceptProposal(jobId, proposalId);
+
+    const chat = await ChatModel.createOrGetChat(job.clientId, proposal.professionalId);
     const locationText = [job.neighborhood, job.city, job.state].filter(Boolean).join(', ');
-    const text = `🤝 Proposta aceita!\n\n📋 *${job.title}*\n${job.description}\n\n💰 Valor acordado: ${priceText}\n📍 ${locationText}${proposal.observation ? `\n\n📝 Observação técnica: ${proposal.observation}` : ''}`;
-    await ChatModel.sendMessage(chat.id, { senderId: uid, receiverId: proposal.professionalId, text, type: 'text' });
+    const priceText = fmtPrice(accepted.currentPrice, job.priceType);
+    const text = `🤝 Proposta aceita!\n\n📋 *${job.title}*\n\n💰 Valor acordado: ${priceText}\n📍 ${locationText}\n\nAguardando confirmação do pagamento PIX para iniciar o trabalho.`;
+    const receiverId = uid === job.clientId ? proposal.professionalId : job.clientId;
+    await ChatModel.sendMessage(chat.id, { senderId: uid, receiverId, text, type: 'text' });
 
-    // WhatsApp: notify professional that their proposal was accepted
-    const professional = await UserModel.findById(proposal.professionalId);
-    WhatsApp.proposalAccepted(professional?.phone, {
-      professionalName: proposal.professionalName,
+    // Notify the other party
+    if (uid === job.clientId) {
+      const professional = await UserModel.findById(proposal.professionalId);
+      WhatsApp.proposalAccepted(professional?.phone, {
+        professionalName: proposal.professionalName,
+        jobTitle: job.title,
+        clientName: job.clientName,
+        price: accepted.currentPrice,
+        priceType: job.priceType,
+      });
+    } else {
+      const client = await UserModel.findById(job.clientId);
+      WhatsApp.proposalAccepted(client?.phone, {
+        professionalName: proposal.professionalName,
+        jobTitle: job.title,
+        clientName: job.clientName,
+        price: accepted.currentPrice,
+        priceType: job.priceType,
+      });
+    }
+
+    res.json({
+      success: true,
+      otherUserId: receiverId,
+      pixKey: process.env.PLATFORM_PIX_KEY || null,
+      pixAmount: accepted.currentPrice,
+      job: await JobModel.getById(jobId),
+    });
+  },
+
+  // Poster confirms PIX payment — job moves to confirmed
+  async confirmPayment(req, res) {
+    const { uid } = req.user;
+    const job = await JobModel.getById(req.params.id);
+    if (!job) return res.status(404).json({ error: 'Vaga não encontrada.' });
+    if (job.clientId !== uid) return res.status(403).json({ error: 'Sem permissão.' });
+    if (job.status !== 'awaiting_payment') return res.status(400).json({ error: 'Vaga não está aguardando pagamento.' });
+
+    await JobModel.confirmPayment(job.id);
+
+    const chat = await ChatModel.createOrGetChat(job.clientId, job.acceptedBy);
+    const priceText = job.confirmedPrice ? `💰 R$ ${Number(job.confirmedPrice).toFixed(2)}\n` : '';
+    const text = `💸 Pagamento PIX confirmado!\n\n📋 *${job.title}*\n${priceText}\nTrabalho confirmado. Pode iniciar! ✅`;
+    await ChatModel.sendMessage(chat.id, { senderId: uid, receiverId: job.acceptedBy, text, type: 'text' });
+
+    const acceptedUser = await UserModel.findById(job.acceptedBy);
+    WhatsApp.paymentReleased(acceptedUser?.phone, {
+      professionalName: acceptedUser?.name || '',
       jobTitle: job.title,
-      clientName: job.clientName,
-      price: proposal.proposedPrice,
+      price: job.confirmedPrice,
       priceType: job.priceType,
     });
 
-    res.json({ success: true, otherUserId: proposal.professionalId, job: await JobModel.getById(jobId) });
+    res.json({ success: true, message: 'Pagamento confirmado! Trabalho iniciado.' });
   },
 
-  // Professional marks job as started
   async startJob(req, res) {
     const { uid } = req.user;
     const job = await JobModel.getById(req.params.id);
     if (!job) return res.status(404).json({ error: 'Vaga não encontrada.' });
     if (job.acceptedBy !== uid) return res.status(403).json({ error: 'Sem permissão.' });
-    if (job.status !== 'confirmed') return res.status(400).json({ error: 'Vaga não está confirmada.' });
+    if (job.status !== 'confirmed') return res.status(400).json({ error: 'Trabalho não está confirmado.' });
     await JobModel.startJob(job.id);
     res.json({ success: true });
   },
 
-  // Professional marks job as complete with evidence
   async completeByProfessional(req, res) {
-    const { uid, name: professionalName } = req.user;
+    const { uid, name: applicantName } = req.user;
     const { completionNote } = req.body;
     const job = await JobModel.getById(req.params.id);
     if (!job) return res.status(404).json({ error: 'Vaga não encontrada.' });
@@ -172,33 +258,29 @@ const JobController = {
     if (!['confirmed', 'in_progress'].includes(job.status)) return res.status(400).json({ error: 'Status inválido.' });
     await JobModel.completeByProfessional(job.id, completionNote);
 
-    // In-app chat notification
     const chat = await ChatModel.createOrGetChat(job.clientId, uid);
     const text = `✅ Serviço concluído!\n\n${completionNote ? `📝 ${completionNote}\n\n` : ''}Por favor, confirme a conclusão na plataforma para liberar o pagamento.`;
     await ChatModel.sendMessage(chat.id, { senderId: uid, receiverId: job.clientId, text, type: 'text' });
 
-    // WhatsApp: notify client to confirm completion
     const client = await UserModel.findById(job.clientId);
     WhatsApp.jobCompletedByProfessional(client?.phone, {
       clientName: job.clientName,
       jobTitle: job.title,
-      professionalName,
+      professionalName: applicantName,
       completionNote: completionNote || '',
     });
 
     res.json({ success: true });
   },
 
-  // Client confirms job completion (releases payment)
   async confirmCompletion(req, res) {
     const { uid } = req.user;
     const job = await JobModel.getById(req.params.id);
     if (!job) return res.status(404).json({ error: 'Vaga não encontrada.' });
     if (job.clientId !== uid) return res.status(403).json({ error: 'Sem permissão.' });
-    if (job.status !== 'awaiting_confirmation') return res.status(400).json({ error: 'Aguardando o profissional marcar como concluído.' });
+    if (job.status !== 'awaiting_confirmation') return res.status(400).json({ error: 'Aguardando o prestador marcar como concluído.' });
     await JobModel.confirmCompletion(job.id);
 
-    // WhatsApp: notify professional that payment was released
     const professional = await UserModel.findById(job.acceptedBy);
     WhatsApp.paymentReleased(professional?.phone, {
       professionalName: professional?.name || '',
@@ -215,7 +297,7 @@ const JobController = {
     const job = await JobModel.getById(req.params.id);
     if (!job) return res.status(404).json({ error: 'Vaga não encontrada.' });
     if (job.clientId !== uid) return res.status(403).json({ error: 'Sem permissão.' });
-    if (!['open', 'confirmed'].includes(job.status)) return res.status(400).json({ error: 'Esta oportunidade não pode ser cancelada.' });
+    if (!['open', 'confirmed'].includes(job.status)) return res.status(400).json({ error: 'Este trabalho não pode ser cancelado.' });
     await JobModel.cancel(job.id);
     res.json({ success: true });
   },

@@ -40,7 +40,8 @@ const requireRole = (...roles) => (req, res, next) => {
 };
 
 const requireAdmin = requireRole('admin');
-const requireProfessional = requireRole('professional', 'admin');
-const requireClient = requireRole('client', 'admin');
+// Legacy aliases — any authenticated user can do client/professional actions now
+const requireProfessional = authenticate;
+const requireClient = authenticate;
 
 module.exports = { authenticate, requireRole, requireAdmin, requireProfessional, requireClient };
