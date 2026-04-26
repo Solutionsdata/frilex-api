@@ -4,6 +4,7 @@ const { authenticate } = require('../middleware/auth');
 const { uploadImage } = require('../middleware/upload');
 
 router.get('/', authenticate, ChatController.listChats);
+router.get('/unread-count', authenticate, ChatController.getUnreadTotal);
 router.get('/:otherUserId', authenticate, ChatController.getOrCreateChat);
 router.post('/upload-image', authenticate, uploadImage.single('image'), ChatController.uploadChatImage);
 

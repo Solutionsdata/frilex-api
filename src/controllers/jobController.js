@@ -26,13 +26,14 @@ async function getAdminUid() {
 const JobController = {
   async list(req, res) {
     const { uid } = req.user;
-    const [openJobs, myPostedJobs, myAcceptedJobs] = await Promise.all([
+    const [openJobs, myPostedJobs, myAcceptedJobs, myProposalJobs] = await Promise.all([
       JobModel.listOpen(),
       JobModel.listByClient(uid),
       JobModel.listByProfessional(uid),
+      JobModel.listByProposer(uid),
     ]);
     const seen = new Set();
-    const jobs = [...openJobs, ...myPostedJobs, ...myAcceptedJobs].filter((j) => {
+    const jobs = [...openJobs, ...myPostedJobs, ...myAcceptedJobs, ...myProposalJobs].filter((j) => {
       if (seen.has(j.id)) return false;
       seen.add(j.id);
       return true;

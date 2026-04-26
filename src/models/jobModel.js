@@ -76,6 +76,7 @@ const JobModel = {
   // Applicant sends a proposal with initial round
   async addProposal(jobId, { professionalId, professionalName, professionalAvatar, proposedPrice, observation }) {
     const db = getFirestore();
+    const { FieldValue } = require('firebase-admin').firestore;
     const id = uuidv4();
     const now = new Date().toISOString();
     const firstRound = {
@@ -98,9 +99,17 @@ const JobModel = {
     await db.collection(COLLECTION).doc(jobId).collection('proposals').doc(id).set(proposal);
     await db.collection(COLLECTION).doc(jobId).update({
       hasProposals: true,
+      proposers: FieldValue.arrayUnion(professionalId),
       updatedAt: now,
     });
     return proposal;
+  },
+
+  async listByProposer(uid) {
+    const db = getFirestore();
+    const snap = await db.collection(COLLECTION).where('proposers', 'array-contains', uid).get();
+    const jobs = snap.docs.map((d) => d.data());
+    return jobs.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   },
 
   async getProposalById(jobId, proposalId) {

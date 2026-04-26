@@ -13,6 +13,13 @@ const ChatController = {
     res.json({ chats });
   },
 
+  async getUnreadTotal(req, res) {
+    const { uid } = req.user;
+    const chats = await ChatModel.getUserChats(uid);
+    const count = chats.reduce((sum, c) => sum + (c.unreadCount?.[uid] || 0), 0);
+    res.json({ count });
+  },
+
   async uploadChatImage(req, res) {
     if (!req.file) return res.status(400).json({ error: 'Nenhuma imagem enviada.' });
     const url = await uploadToFirebase(req.file, `chat-images/${req.user.uid}`);
